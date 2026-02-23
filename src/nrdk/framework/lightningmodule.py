@@ -98,7 +98,7 @@ class NRDKLightningModule(
         self.log = torch.compiler.disable(self.log)  # type: ignore
         self.log_dict = torch.compiler.disable(self.log_dict)  # type: ignore
 
-    def compile(self) -> None:
+    def compile(self, dynamic: bool = True) -> None:
         """Compile model in-place.
 
         !!! bug
@@ -116,7 +116,7 @@ class NRDKLightningModule(
                 "torch.compile is currently incompatible with jaxtyping; "
                 "if you see type errors, set the environment variable "
                 "`JAXTYPING_DISABLE=1` to disable jaxtyping checks.")
-        super().compile()
+        super().compile(dynamic=dynamic)
         self._log.info("LightningModule compiled with torch.compile.")
 
     # NOTE: any @torch.compiler.disable method breaks the type checker. Any
@@ -294,8 +294,8 @@ class NRDKLightningModule(
         y_true, y_pred = self(batch)
 
         loss, metrics = self.objective(y_true, y_pred, train=True)
-        loss = torch.mean(loss)
-        metrics = {k: torch.mean(v) for k, v in metrics.items()}
+        loss = torch.nanmean(loss)
+        metrics = {k: torch.nanmean(v) for k, v in metrics.items()}
 
         self.log_dict(
             {f"{k}/train": v for k, v in metrics.items()},
@@ -329,8 +329,8 @@ class NRDKLightningModule(
         """Standard lightning validation step."""
         y_true, y_pred = self(batch)
         loss, metrics = self.objective(y_true, y_pred, train=False)
-        loss = torch.mean(loss)
-        metrics = {k: torch.mean(v) for k, v in metrics.items()}
+        loss = torch.nanmean(loss)
+        metrics = {k: torch.nanmean(v) for k, v in metrics.items()}
 
         self.log_dict(
             {f"{k}/val": v for k, v in metrics.items()}, sync_dist=True)
@@ -399,6 +399,27 @@ class NRDKLightningModule(
                 else:
                     rendered = self.objective.render(y_true, y_hat)
                     yield np_metrics, rendered
+
+    def on_before_optimizer_step(
+        self, optimizer: torch.optim.Optimizer
+    ) -> None:
+        """Skip optimizer step if any gradients are non-finite.
+
+        This is needed when using `bf16-mixed` precision, which unlike
+        `fp16-mixed` does not use a `GradScaler` and therefore does not
+        automatically skip updates on NaN/Inf gradients.
+        """
+        for group in optimizer.param_groups:
+            for p in group["params"]:
+                if p.grad is not None and not torch.isfinite(p.grad).all():
+                    self._log.warning(
+                        f"Non-finite gradient detected at step "
+                        f"{self.global_step}; skipping update.")
+                    self.log(
+                        "train/nan_grad_skip", 1.0,
+                        on_step=True, on_epoch=False)
+                    self.zero_grad()
+                    return
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         """Configure optimizers; passthrough to the provided `Optimizer`."""
