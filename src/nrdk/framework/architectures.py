@@ -40,8 +40,8 @@ class TokenizerEncoderDecoder(nn.Module):
         and model components are compatible (i.e., have the correct type).
 
     Args:
-        tokenizer: tokenizer module.
-        encoder: encoder module.
+        tokenizer: tokenizer module; skipped if `None`.
+        encoder: encoder module; skipped if `None`.
         decoder: decoder modules; each key corresponds to the output key.
         key: key in the input data to use as the model input.
         squeeze: eliminate non-temporal, non-batch singleton axes in the
@@ -49,11 +49,17 @@ class TokenizerEncoderDecoder(nn.Module):
     """
 
     def __init__(
-        self, tokenizer: nn.Module, encoder: nn.Module | None = None,
+        self,
+        tokenizer: nn.Module | None = None,
+        encoder: nn.Module | None = None,
         decoder: Mapping[str, nn.Module] = {},
         key: str = "spectrum", squeeze: bool = True
     ) -> None:
         super().__init__()
+
+        if len(decoder) == 0:
+            raise ValueError("At least one decoder must be provided.")
+
         self.tokenizer = tokenizer
         self.encoder = encoder
         self.decoder = nn.ModuleDict(decoder)
@@ -78,10 +84,14 @@ class TokenizerEncoderDecoder(nn.Module):
         outputs = {}
 
         x = data[self.key]
-        tokens = self.tokenizer(x)
-        if isinstance(tokens, Output):
-            outputs.update(tokens.output)
-            tokens = tokens.stage
+
+        if self.tokenizer is not None:
+            tokens = self.tokenizer(x)
+            if isinstance(tokens, Output):
+                outputs.update(tokens.output)
+                tokens = tokens.stage
+        else:
+            tokens = x
 
         if self.encoder is not None:
             encoded = self.encoder(tokens)
