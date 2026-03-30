@@ -1,3 +1,9 @@
+# Checkpoints
+checkpoints/
+
+# VSCode
+.vscode/
+
 # Notebooks
 *.ipynb
 !/notebooks/*.ipynb
